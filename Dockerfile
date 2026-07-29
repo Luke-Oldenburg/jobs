@@ -1,29 +1,30 @@
-FROM alpine
+# ---- build stage ----
+FROM golang:1.25-alpine AS builder
 
-RUN apk add go
+WORKDIR /app
 
 COPY go.mod go.sum ./
-
 RUN go mod download
 
-COPY ./ ./
+COPY . .
+RUN CGO_ENABLED=0 go build -o jobs .
 
-RUN CGO_ENABLED=0 go build -o jobs
+# ---- runtime stage ----
+FROM alpine:3.22
 
-FROM alpine
+# openssh provides ssh-keygen, used by the entrypoint to generate
+# host keys at runtime (NOT at build time, so keys survive image rebuilds)
+RUN apk add --no-cache openssh
 
-RUN apk add openssh
+WORKDIR /app
 
-RUN mkdir keys
+COPY --from=builder /app/jobs .
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
-RUN ssh-keygen -t rsa -f keys/id_rsa -P ""
+# The SSH server listens on :1337 by default.
+# Override with the SSH_PORT env var if needed.
+ENV SSH_PORT=1337
+EXPOSE 1337
 
-RUN ssh-keygen -t ed25519 -f keys/id_ed25519 -P ""
-
-FROM alpine 
-
-COPY --from=0 /jobs /jobs
-
-COPY --from=1 /keys /tmp 
-
-ENTRYPOINT ["/jobs"]
+ENTRYPOINT ["./entrypoint.sh"]
